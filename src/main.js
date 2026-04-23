@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createVinyl, createPlatter } from './vinyl.js';
 import { createTonearm, PIVOT, ARM_START_ANGLE, ARM_END_ANGLE } from './tonearm.js';
 import { VinylAudio } from './audio.js';
@@ -16,7 +17,6 @@ const camera = new THREE.OrthographicCamera(
   camSize, -camSize,
   0.1, 100
 );
-// Classic isometric angle
 camera.position.set(7, 7, 7);
 camera.lookAt(0, 0, 0);
 
@@ -27,6 +27,18 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+// ── Orbit controls (camera pan / orbit / zoom via touch or mouse) ──────────
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.enablePan = true;
+controls.enableZoom = true;
+controls.minZoom = 0.4;
+controls.maxZoom = 3;
+controls.rotateSpeed = 0.6;
+controls.zoomSpeed = 0.8;
 
 // ── Lighting ───────────────────────────────────────────────────────────────
 const ambient = new THREE.AmbientLight(0xffffff, 0.35);
@@ -68,40 +80,38 @@ tonearm.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = t
 scene.add(tonearm);
 
 // ── State ──────────────────────────────────────────────────────────────────
-let sideDuration = 30 * 60 * 1000; // ms
+let sideDuration = 30 * 60 * 1000;
 let elapsed = 0;
 let lastTime = null;
 let isPlaying = true;
 let isDragging = false;
-let dragPivotAngle = 0;
-let dragMouseStart = new THREE.Vector2();
-let vinylRpm = 33.3;
+const vinylRpm = 33.3;
 
 const audio = new VinylAudio();
 
-// ── Raycasting helpers ─────────────────────────────────────────────────────
+// ── Raycasting ─────────────────────────────────────────────────────────────
 const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
 
-// Collect tonearm meshes for hit-testing
+// Collect visible tonearm meshes + a generous invisible hit slab
 const armMeshes = [];
 tonearm.traverse(o => { if (o.isMesh) armMeshes.push(o); });
 
-// Invisible wide hit area for easier arm grabbing
-const hitGeo = new THREE.BoxGeometry(0.4, 0.15, 2.9);
+// Wide flat hit area along the arm so fingers can easily grab it on mobile
+const hitGeo = new THREE.BoxGeometry(0.7, 0.35, 2.9);
 const hitMat = new THREE.MeshBasicMaterial({ visible: false });
 const hitMesh = new THREE.Mesh(hitGeo, hitMat);
 hitMesh.position.set(0, 0.06, -2.9 / 2);
 tonearm.add(hitMesh);
 armMeshes.push(hitMesh);
 
-// ── Arm progress helpers ───────────────────────────────────────────────────
+// ── Arm helpers ────────────────────────────────────────────────────────────
+// ARM_START_ANGLE < ARM_END_ANGLE (both positive, arm sweeps inward)
 function clampAngle(a) {
-  return Math.max(ARM_END_ANGLE, Math.min(ARM_START_ANGLE, a));
+  return Math.max(ARM_START_ANGLE, Math.min(ARM_END_ANGLE, a));
 }
 
 function progress() {
-  return (ARM_START_ANGLE - tonearm.rotation.y) / (ARM_START_ANGLE - ARM_END_ANGLE);
+  return (tonearm.rotation.y - ARM_START_ANGLE) / (ARM_END_ANGLE - ARM_START_ANGLE);
 }
 
 // ── Skip logic ─────────────────────────────────────────────────────────────
@@ -117,16 +127,12 @@ function handleKeyMash() {
 }
 
 function skipSide() {
-  // Snap arm toward centre quickly then reset
   const remaining = ARM_END_ANGLE - tonearm.rotation.y;
-  const steps = 60;
   let s = 0;
+  const steps = 60;
   const snap = setInterval(() => {
     tonearm.rotation.y += remaining / steps;
-    if (++s >= steps) {
-      clearInterval(snap);
-      setTimeout(resetSide, 400);
-    }
+    if (++s >= steps) { clearInterval(snap); setTimeout(resetSide, 400); }
   }, 16);
 }
 
@@ -136,7 +142,7 @@ function resetSide() {
   updateStatus();
 }
 
-// ── Arm-drag mouse/touch handling ──────────────────────────────────────────
+// ── Coordinate helpers ─────────────────────────────────────────────────────
 function toNDC(clientX, clientY) {
   return new THREE.Vector2(
     (clientX / window.innerWidth) * 2 - 1,
@@ -149,24 +155,24 @@ function hitTestArm(ndcX, ndcY) {
   return raycaster.intersectObjects(armMeshes).length > 0;
 }
 
-// Project mouse onto a horizontal plane at arm height to get drag angle
-function armAngleFromMouse(ndcX, ndcY) {
+// Project touch/mouse onto the horizontal plane at arm height → arm angle
+const _armPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -PIVOT.y);
+const _armHit   = new THREE.Vector3();
+function armAngleFromPointer(ndcX, ndcY) {
   raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -PIVOT.y);
-  const hit = new THREE.Vector3();
-  raycaster.ray.intersectPlane(plane, hit);
-  if (!hit) return null;
-  const dx = hit.x - PIVOT.x;
-  const dz = hit.z - PIVOT.z;
-  return Math.atan2(dx, -dz);
+  if (!raycaster.ray.intersectPlane(_armPlane, _armHit)) return null;
+  const dx = _armHit.x - PIVOT.x;
+  const dz = _armHit.z - PIVOT.z;
+  // angle such that world_x = pivot.x - L*sin(θ), world_z = pivot.z - L*cos(θ)
+  return Math.atan2(-dx, dz);
 }
 
+// ── Pointer (mouse) drag ───────────────────────────────────────────────────
 renderer.domElement.addEventListener('mousedown', e => {
   const ndc = toNDC(e.clientX, e.clientY);
   if (!hitTestArm(ndc.x, ndc.y)) return;
   isDragging = true;
-  dragPivotAngle = tonearm.rotation.y;
-  dragMouseStart = ndc.clone();
+  controls.enabled = false;
   renderer.domElement.style.cursor = 'grabbing';
   audio.resume();
   if (!audio.started) audio.start();
@@ -175,7 +181,7 @@ renderer.domElement.addEventListener('mousedown', e => {
 window.addEventListener('mousemove', e => {
   if (!isDragging) return;
   const ndc = toNDC(e.clientX, e.clientY);
-  const angle = armAngleFromMouse(ndc.x, ndc.y);
+  const angle = armAngleFromPointer(ndc.x, ndc.y);
   if (angle !== null) {
     tonearm.rotation.y = clampAngle(angle);
     elapsed = progress() * sideDuration;
@@ -183,28 +189,32 @@ window.addEventListener('mousemove', e => {
 });
 
 window.addEventListener('mouseup', () => {
-  if (isDragging) {
-    isDragging = false;
-    renderer.domElement.style.cursor = '';
-  }
+  if (!isDragging) return;
+  isDragging = false;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = '';
 });
 
-// Touch equivalents
+// ── Touch drag (arm) — capture phase so it beats OrbitControls ────────────
+// Using capture:true so our handler fires before OrbitControls' bubble handler.
 renderer.domElement.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) return;
   const t = e.touches[0];
   const ndc = toNDC(t.clientX, t.clientY);
   if (!hitTestArm(ndc.x, ndc.y)) return;
+  // Arm hit — take over, prevent OrbitControls from starting
   isDragging = true;
+  controls.enabled = false;
   e.preventDefault();
   audio.resume();
   if (!audio.started) audio.start();
-}, { passive: false });
+}, { capture: true, passive: false });
 
 window.addEventListener('touchmove', e => {
   if (!isDragging) return;
   const t = e.touches[0];
   const ndc = toNDC(t.clientX, t.clientY);
-  const angle = armAngleFromMouse(ndc.x, ndc.y);
+  const angle = armAngleFromPointer(ndc.x, ndc.y);
   if (angle !== null) {
     tonearm.rotation.y = clampAngle(angle);
     elapsed = progress() * sideDuration;
@@ -212,23 +222,25 @@ window.addEventListener('touchmove', e => {
   e.preventDefault();
 }, { passive: false });
 
-window.addEventListener('touchend', () => { isDragging = false; });
+window.addEventListener('touchend', () => {
+  if (!isDragging) return;
+  isDragging = false;
+  controls.enabled = true;
+});
 
-// Key mash
-window.addEventListener('keydown', e => {
-  // Start audio on first keypress
+// ── Key mash ───────────────────────────────────────────────────────────────
+window.addEventListener('keydown', () => {
   audio.resume();
   if (!audio.started) audio.start();
   handleKeyMash();
 });
 
-// Click canvas to start audio
 renderer.domElement.addEventListener('click', () => {
   audio.resume();
   if (!audio.started) audio.start();
 });
 
-// ── Status label ───────────────────────────────────────────────────────────
+// ── Status ─────────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 function updateStatus() {
   const p = progress();
@@ -239,13 +251,13 @@ function updateStatus() {
 }
 
 // ── Config panel ───────────────────────────────────────────────────────────
-const configBtn = document.getElementById('config-btn');
+const configBtn   = document.getElementById('config-btn');
 const configPanel = document.getElementById('config-panel');
 configBtn.addEventListener('click', () => configPanel.classList.toggle('open'));
 
 function bindSlider(id, valId, onChange) {
   const slider = document.getElementById(id);
-  const label = document.getElementById(valId);
+  const label  = document.getElementById(valId);
   slider.addEventListener('input', () => {
     label.textContent = slider.value;
     onChange(parseInt(slider.value) / 100);
@@ -255,11 +267,11 @@ function bindSlider(id, valId, onChange) {
 }
 
 bindSlider('crackle', 'crackle-val', v => audio.setCrackle(v));
-bindSlider('hiss', 'hiss-val', v => audio.setHiss(v));
-bindSlider('volume', 'vol-val', v => audio.setMaster(v));
+bindSlider('hiss',    'hiss-val',    v => audio.setHiss(v));
+bindSlider('volume',  'vol-val',     v => audio.setMaster(v));
 
 const durSlider = document.getElementById('duration');
-const durVal = document.getElementById('dur-val');
+const durVal    = document.getElementById('dur-val');
 durSlider.addEventListener('input', () => {
   durVal.textContent = durSlider.value;
   sideDuration = parseInt(durSlider.value) * 60 * 1000;
@@ -271,8 +283,8 @@ document.getElementById('reset-btn').addEventListener('click', resetSide);
 // ── Resize ─────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   const a = window.innerWidth / window.innerHeight;
-  camera.left = -camSize * a;
-  camera.right = camSize * a;
+  camera.left   = -camSize * a;
+  camera.right  =  camSize * a;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
@@ -286,10 +298,8 @@ function animate(now) {
   if (lastTime !== null && isPlaying) {
     const dt = now - lastTime;
 
-    // Spin vinyl
     vinyl.rotation.y += vinylRadPerMs * dt;
 
-    // Drift arm (only when not dragging)
     if (!isDragging) {
       elapsed += dt;
       if (elapsed >= sideDuration) {
@@ -298,7 +308,6 @@ function animate(now) {
         setTimeout(() => { resetSide(); isPlaying = true; }, 1500);
       }
       const t = elapsed / sideDuration;
-      // Ease-in slightly — real vinyl drifts non-linearly due to groove geometry
       const easedT = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
       tonearm.rotation.y = ARM_START_ANGLE + (ARM_END_ANGLE - ARM_START_ANGLE) * easedT;
     }
@@ -307,6 +316,7 @@ function animate(now) {
   }
 
   lastTime = now;
+  controls.update(); // needed for damping
   renderer.render(scene, camera);
 }
 

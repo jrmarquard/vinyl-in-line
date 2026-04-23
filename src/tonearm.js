@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 
 // Pivot is at world position (3.0, 0, 2.4) — rear-right of platter.
-// Arm rotates around Y. Negative rotation sweeps stylus inward (CCW from above).
-// startAngle: stylus near outer groove (~r 1.85)
-// endAngle:   stylus near inner groove (~r 0.52)
+// Stylus world pos = (pivot.x - L*sin(θ), 0, pivot.z - L*cos(θ)) where L=3.12.
+// ARM_START_ANGLE=0.35 → stylus at r≈2.0 (outer groove)
+// ARM_END_ANGLE=0.90   → stylus at r≈0.72 (inner groove)
 export const PIVOT = new THREE.Vector3(3.0, 0, 2.4);
-export const ARM_START_ANGLE = -0.42;   // radians
-export const ARM_END_ANGLE   = -1.02;   // radians
+export const ARM_START_ANGLE = 0.35;   // radians — on the record
+export const ARM_END_ANGLE   = 0.90;   // radians — near label
 
 export function createTonearm() {
   const group = new THREE.Group();
