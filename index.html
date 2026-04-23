@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vinyl In Line</title>
+  <meta name="description" content="A minimal deep house vinyl PWA" />
+  <meta name="theme-color" content="#0f0f0f" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f0f;
+      --surface: #161616;
+      --border: #2a2a2a;
+      --text: #c8c8c8;
+      --text-dim: #555;
+      --accent: #c8a96e;
+      --font: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      overflow: hidden;
+      font-family: var(--font);
+      color: var(--text);
+    }
+
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    canvas { display: block; }
+
+    /* ── Config toggle ── */
+    #config-btn {
+      position: fixed;
+      top: 20px; right: 20px;
+      width: 36px; height: 36px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.2s;
+      z-index: 100;
+    }
+    #config-btn:hover { border-color: var(--text-dim); }
+    #config-btn svg { fill: var(--text-dim); transition: fill 0.2s; }
+    #config-btn:hover svg { fill: var(--text); }
+
+    /* ── Config panel ── */
+    #config-panel {
+      position: fixed;
+      top: 64px; right: 20px;
+      width: 240px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      display: none;
+      flex-direction: column;
+      gap: 18px;
+      z-index: 100;
+    }
+    #config-panel.open { display: flex; }
+
+    .config-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .config-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .config-label span { color: var(--accent); }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 2px;
+      background: var(--border);
+      border-radius: 1px;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+    }
+
+    .config-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    .config-reset {
+      font-family: var(--font);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 10px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .config-reset:hover { color: var(--text); border-color: var(--text-dim); }
+
+    /* ── Status pill ── */
+    #status {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      pointer-events: none;
+      transition: opacity 0.4s;
+    }
+
+    /* ── Hint ── */
+    #hint {
+      position: fixed;
+      bottom: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      pointer-events: none;
+      white-space: nowrap;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <button id="config-btn" aria-label="Settings">
+    <svg width="16" height="16" viewBox="0 0 16 16">
+      <path d="M8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zm0 1a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>
+      <path d="M6.796 1.098a.5.5 0 0 1 .938 0l.458 1.374a4.5 4.5 0 0 1 1.168.674l1.432-.28a.5.5 0 0 1 .554.278l.468.938a.5.5 0 0 1-.116.609l-1.07.91a4.5 4.5 0 0 1 0 1.358l1.07.91a.5.5 0 0 1 .116.609l-.468.938a.5.5 0 0 1-.554.278l-1.432-.28a4.5 4.5 0 0 1-1.168.674l-.458 1.374a.5.5 0 0 1-.938 0L6.34 13.17a4.5 4.5 0 0 1-1.168-.674l-1.432.28a.5.5 0 0 1-.554-.278l-.468-.938a.5.5 0 0 1 .116-.609l1.07-.91a4.5 4.5 0 0 1 0-1.358l-1.07-.91a.5.5 0 0 1-.116-.609l.468-.938a.5.5 0 0 1 .554-.278l1.432.28A4.5 4.5 0 0 1 6.34 5.83l.456-1.373z"/>
+    </svg>
+  </button>
+
+  <div id="config-panel">
+    <div class="config-row">
+      <div class="config-label">Crackle <span id="crackle-val">50</span></div>
+      <input type="range" id="crackle" min="0" max="100" value="50" />
+    </div>
+    <div class="config-row">
+      <div class="config-label">Hiss <span id="hiss-val">30</span></div>
+      <input type="range" id="hiss" min="0" max="100" value="30" />
+    </div>
+    <div class="config-row">
+      <div class="config-label">Volume <span id="vol-val">70</span></div>
+      <input type="range" id="volume" min="0" max="100" value="70" />
+    </div>
+    <hr class="config-divider" />
+    <div class="config-row">
+      <div class="config-label">Side duration (min) <span id="dur-val">30</span></div>
+      <input type="range" id="duration" min="5" max="60" value="30" />
+    </div>
+    <button class="config-reset" id="reset-btn">Reset arm</button>
+  </div>
+
+  <div id="hint">drag arm · key mash to skip</div>
+  <div id="status">side a</div>
+
+  <script type="module" src="src/main.js"></script>
+  <script src="src/register-sw.js"></script>
+</body>
+</html>
